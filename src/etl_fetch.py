@@ -1,0 +1,124 @@
+"""Extract step: pull daily BTC-USD OHLCV data and store it in raw storage (CSV).
+
+Primary source is yfinance; if it fails or returns nothing we fall back to the
+public CoinGecko API. The output always has the same schema:
+    date, open, high, low, close, volume
+"""
+
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pandas as pd
+import requests
+
+from src import config
+
+log = logging.getLogger(__name__)
+
+COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+MIN_ROWS = 60  # refuse to store obviously broken downloads
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+
+
+def fetch_yfinance(ticker: str = config.TICKER, period: str = "3y") -> pd.DataFrame:
+    """Download daily candles with yfinance and normalise the columns."""
+    import yfinance as yf  # imported lazily: not needed by the API image
+
+    hist = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=False)
+    if hist is None or hist.empty:
+        raise ValueError("yfinance returned no data")
+    df = hist.reset_index()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    df = df.rename(columns={"datetime": "date"})
+    missing = set(COLUMNS) - set(df.columns)
+    if missing:
+        raise ValueError(f"yfinance data is missing columns: {sorted(missing)}")
+    return df[COLUMNS]
+
+
+def fetch_coingecko(days: int = 365, timeout: int = 30) -> pd.DataFrame:
+    """Fallback source. The free market_chart endpoint gives daily close + volume only,
+    so open is approximated by the previous close and high/low by max/min(open, close)."""
+    headers = {}
+    api_key = os.getenv("COINGECKO_API_KEY")
+    if api_key:
+        headers["x-cg-demo-api-key"] = api_key
+    resp = requests.get(
+        COINGECKO_URL,
+        params={"vs_currency": "usd", "days": days, "interval": "daily"},
+        headers=headers,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    prices = pd.DataFrame(body.get("prices", []), columns=["ts", "close"])
+    volumes = pd.DataFrame(body.get("total_volumes", []), columns=["ts", "volume"])
+    if prices.empty:
+        raise ValueError("CoinGecko returned no prices")
+    df = prices.merge(volumes, on="ts", how="left")
+    df["date"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    df["open"] = df["close"].shift(1).fillna(df["close"])
+    df["high"] = df[["open", "close"]].max(axis=1)
+    df["low"] = df[["open", "close"]].min(axis=1)
+    return df[COLUMNS]
+
+
+def clean(df: pd.DataFrame, today: datetime | None = None) -> pd.DataFrame:
+    """Normalise dates to tz-naive calendar days, sort, de-duplicate, drop bad rows,
+    and drop today's still-forming (incomplete) daily candle."""
+    out = df.copy()
+    dates = pd.to_datetime(out["date"], utc=True)
+    out["date"] = dates.dt.tz_localize(None).dt.normalize()
+    for col in COLUMNS[1:]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["close"])
+    out = out[out["close"] > 0]
+    out = out.sort_values("date").drop_duplicates(subset="date", keep="last")
+    today = (today or datetime.now(timezone.utc)).replace(tzinfo=None)
+    out = out[out["date"] < pd.Timestamp(today).normalize()]
+    return out.reset_index(drop=True)
+
+
+def fetch_btc() -> tuple[pd.DataFrame, str]:
+    """Try yfinance, then CoinGecko. Returns (cleaned dataframe, source name)."""
+    errors = []
+    for name, fn in (("yfinance", fetch_yfinance), ("coingecko", fetch_coingecko)):
+        try:
+            df = clean(fn())
+            if len(df) < MIN_ROWS:
+                raise ValueError(f"only {len(df)} rows")
+            log.info("fetched BTC data", extra={"source": name, "rows": len(df)})
+            return df, name
+        except Exception as exc:  # noqa: BLE001 - any failure means "try the next source"
+            log.warning("data source failed", extra={"source": name, "error": str(exc)})
+            errors.append(f"{name}: {exc}")
+    raise RuntimeError("all data sources failed: " + "; ".join(errors))
+
+
+def save_csv_atomic(df: pd.DataFrame, path: Path) -> Path:
+    """Write to a temp file then rename, so readers never see a half-written CSV."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_csv(tmp, index=False, date_format="%Y-%m-%d")
+    os.replace(tmp, path)
+    return path
+
+
+def run_fetch(out_path: Path | None = None) -> Path:
+    """Entry point used by Airflow / CLI / KFP: fetch and store the raw CSV."""
+    df, source = fetch_btc()
+    path = save_csv_atomic(df, out_path or config.raw_path())
+    log.info(
+        "raw data saved",
+        extra={
+            "path": str(path),
+            "source": source,
+            "rows": len(df),
+            "first_date": str(df["date"].iloc[0].date()),
+            "last_date": str(df["date"].iloc[-1].date()),
+        },
+    )
+    return path
