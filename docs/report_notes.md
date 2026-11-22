@@ -163,7 +163,8 @@ Flask's test client. Gunicorn itself is shown running in the Docker container in
 | Image | Uncompressed | Compressed (registry) |
 |---|---|---|
 | samiurk/btc-forecast-api | 376 MB | 122 MB |
-| samiurk/btc-forecast-train | (see below) | |
+| samiurk/btc-forecast-train | 440 MB | 145 MB |
+| btc-forecast-airflow (local only) | 1.2 GB (386 MB is /opt/ml-venv) | n/a |
 
 Breakdown of the API venv (248 MB): scipy 85 MB + scipy.libs 27 MB, pandas 38 MB, numpy 29 MB +
 numpy.libs 27 MB, xgboost 18 MB. **scipy is a hard dependency**: `xgboost/core.py` does
@@ -204,3 +205,42 @@ yfinance 1.8 → curl_cffi 0.17 needs cffi ≥ 2.1.1. Options considered: overri
 is installed strictly with constraints, and the ML tasks run in `/opt/ml-venv` through
 `ExternalPythonOperator`. That venv uses the same `requirements-train.txt` as the train/API images,
 so the model is trained with exactly the library versions the API serves with.
+
+### Verification
+```text
+$ docker build -f app/Dockerfile -t samiurk/btc-forecast-api:local .
+#12 428.2 imports ok                     <- build-time import check
+$ docker run -d -p 5000:5000 -e API_KEY=demo -v ./models:/app/models:ro samiurk/btc-forecast-api:local
+[INFO] Starting gunicorn 23.0.0 / Listening at: http://0.0.0.0:5000 / Booting worker x2
+GET  /health  -> {"status":"ok","model_loaded":true,"model_version":"20261122T200335Z",...}
+POST /predict -> 7 predictions, 2026-11-22 60434.9 ... 2026-11-28 59480.11 (identical to the Windows run)
+docker top: 3 gunicorn processes, user 10001   docker inspect Health: healthy
+
+$ docker compose up -d --wait
+Container btc-forecast-postgres-1 Healthy / btc-forecast-api-1 Healthy / btc-forecast-airflow-1 Healthy
+docker stats: airflow 727 MiB / 2 GiB, postgres 84 MiB / 256 MiB, api 155 MiB / 512 MiB
+airflow -> curl http://api:5000/health            -> 200 (service-name DNS works)
+airflow -> curl -X POST -H "X-API-Key: $API_KEY" $API_RELOAD_URL -> {"reloaded":true,...}
+ML venv: xgboost 3.2.0 | pandas 2.2.3 | numpy 2.2.6 | yfinance 1.8.0   Airflow core: 2.10.5, cffi 1.17.1
+```
+
+GitHub Actions run 45075612809 (commit 3f7999f), all green, about 3 minutes total:
+```text
+Lint (flake8 + black)            22:04:27 -> 22:04:42  success
+Unit tests (pytest + coverage)   22:04:27 -> 22:05:09  success
+Build & push Docker images       22:05:11 -> 22:07:33  success (login, api push, train push, smoke test)
+Docker Hub (public):
+  samiurk/btc-forecast-api    tags 3f7999ff8887..., latest   121.9 MB compressed
+  samiurk/btc-forecast-train  tags 3f7999ff8887..., latest   145.1 MB compressed
+```
+Links: https://github.com/samiurkhan10-rgb/btc-forecast-mlops/actions ·
+https://hub.docker.com/r/samiurk/btc-forecast-api · https://hub.docker.com/r/samiurk/btc-forecast-train
+
+### Screenshots for Part B
+1. Terminal: `docker build` of the API image (end of output, including `imports ok`) and `docker images` with the sizes.
+2. Terminal: `docker compose ps` showing all 3 services **healthy**, plus `docker stats --no-stream`.
+3. Browser: `http://localhost:5000/health` and a `/predict` response from the container (the Part A JSON screenshot).
+4. Browser: Airflow UI login page / home at `http://localhost:8080` (no DAGs yet; the DAG comes in Part C).
+5. GitHub → Actions → run for commit 3f7999f: the graph with lint, test → build-and-push all green.
+6. GitHub → the build-and-push job expanded, showing "Log in to Docker Hub", both pushes and "Smoke test" green.
+7. Docker Hub → `samiurk/btc-forecast-api` Tags tab showing the SHA tag and `latest` (and the train repo).
