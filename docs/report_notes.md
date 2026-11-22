@@ -99,6 +99,36 @@ so naive persistence is a strong baseline at short horizons. The point of this a
 MLOps pipeline. Possible next steps: exogenous features (volume, funding rates), quantile
 forecasts, or gating promotion on "beats baseline".
 
+### Issue found and fixed: data fetch failed on a slow network
+A later run of `python -m src.cli all` failed with **both** sources down:
+```text
+ERROR yfinance  $BTC-USD: possibly delisted; no price data found  (period=3y)
+WARNING src.etl_fetch  data source failed source=coingecko error=Read timed out. (read timeout=30)
+RuntimeError: all data sources failed
+```
+Diagnosis with curl: every endpoint was reachable, but the **TCP connect alone took about 5 s**:
+```text
+200 connect=5.09s total=6.61s  query2.finance.yahoo.com
+200 connect=4.99s total=7.50s  api.coingecko.com
+200 connect=1.47s total=1.91s  api.binance.com
+```
+Cause: yfinance's default 10 s request timeout expired. yfinance catches the error and returns
+an empty frame with a misleading "possibly delisted" message. CoinGecko hit our 30 s read timeout.
+Each source got only one attempt.
+
+Fix in `src/etl_fetch.py` (the requirement isn't weakened: a total failure still fails loudly):
+- yfinance `timeout=60`; HTTP APIs use `(connect=20 s, read=90 s)`.
+- `with_retries()`: 3 attempts per source with exponential backoff (5 s, 15 s),
+  configurable with `FETCH_RETRIES` / `FETCH_BACKOFF_SECONDS`.
+- Third source **Binance public klines** (BTCUSDT, real daily OHLCV; the assignment lists it).
+  Order: yfinance → CoinGecko → Binance.
+- 5 new mocked tests (retry backoff, retry exhaustion, yfinance retried, Binance parsing,
+  Binance fallback). Result: **67 passed**, flake8 clean.
+```text
+$ python -m src.cli all     -> source=yfinance rows=1096, version 20261122T195838Z, MAPE 4.02 (33 s)
+binance live check: 999 rows 2024-02-27 -> 2026-11-21 last close 60215.77
+```
+
 Note: gunicorn doesn't run natively on Windows (it needs `fcntl`). Locally the API is tested with
 Flask's test client. Gunicorn itself is shown running in the Docker container in Part B.
 

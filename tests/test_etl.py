@@ -1,4 +1,4 @@
-"""ETL tests: yfinance and CoinGecko are always mocked (CI must never hit external APIs)."""
+"""ETL tests: yfinance, CoinGecko and Binance are always mocked (CI never hits external APIs)."""
 
 import sys
 import types
@@ -9,6 +9,24 @@ import pytest
 
 from src import etl_fetch
 from tests.conftest import make_prices
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep(monkeypatch):
+    """Keep retry logic but make the backoff instant in tests."""
+    sleeps = []
+    monkeypatch.setattr(etl_fetch.time, "sleep", sleeps.append)
+    return sleeps
+
+
+def _binance_klines(n=120):
+    start = pd.Timestamp("2026-06-01", tz="UTC")
+    rows = []
+    for i in range(n):
+        t = int((start + pd.Timedelta(days=i)).timestamp() * 1000)
+        o, c = 60_000 + 10 * i, 60_005 + 10 * i
+        rows.append([t, str(o), str(c + 50), str(o - 50), str(c), "12.5", t + 86_399_999, "7.5e8"])
+    return rows
 
 
 def _fake_yfinance(monkeypatch, history_df):
@@ -146,3 +164,71 @@ def test_network_is_blocked_in_tests():
 
     with pytest.raises(Exception):
         urllib.request.urlopen("https://example.com", timeout=2)
+
+
+def test_fetch_binance_parses_klines(monkeypatch):
+    monkeypatch.setattr(
+        etl_fetch.requests, "get", lambda *a, **k: FakeResponse(_binance_klines(100))
+    )
+    df = etl_fetch.fetch_binance()
+    assert list(df.columns) == etl_fetch.COLUMNS
+    assert len(df) == 100
+    first = df.iloc[0]
+    assert float(first["high"]) >= float(first["close"]) >= float(first["low"])
+    assert float(first["volume"]) == pytest.approx(7.5e8)  # quote (USD) volume
+
+
+def test_with_retries_recovers_after_transient_failures(_no_retry_sleep):
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise TimeoutError("slow network")
+        return "ok"
+
+    assert etl_fetch.with_retries("x", flaky, attempts=3, backoff=5) == "ok"
+    assert _no_retry_sleep == [5, 15]  # exponential backoff 5 s, then 15 s
+
+
+def test_with_retries_gives_up_after_last_attempt():
+    def always_fail():
+        raise TimeoutError("down")
+
+    with pytest.raises(TimeoutError):
+        etl_fetch.with_retries("x", always_fail, attempts=2, backoff=0)
+
+
+def test_yfinance_is_retried_before_falling_back(monkeypatch):
+    """An empty yfinance result (its symptom of a network timeout) is retried."""
+    good = _yf_style(make_prices(120))
+    results = [pd.DataFrame(), good]
+    fake = types.ModuleType("yfinance")
+
+    class Ticker:
+        def __init__(self, symbol):
+            pass
+
+        def history(self, **kwargs):
+            assert kwargs["timeout"] == etl_fetch.YF_TIMEOUT
+            return results.pop(0)
+
+    fake.Ticker = Ticker
+    monkeypatch.setitem(sys.modules, "yfinance", fake)
+    df, source = etl_fetch.fetch_btc()
+    assert source == "yfinance"
+    assert len(df) == 120
+
+
+def test_falls_back_to_binance_when_coingecko_fails(monkeypatch):
+    monkeypatch.setattr(etl_fetch, "fetch_yfinance", lambda: pd.DataFrame())
+
+    def fake_get(url, **kwargs):
+        if "coingecko" in url:
+            return FakeResponse({}, status=503)
+        return FakeResponse(_binance_klines())
+
+    monkeypatch.setattr(etl_fetch.requests, "get", fake_get)
+    df, source = etl_fetch.fetch_btc()
+    assert source == "binance"
+    assert len(df) == 120
