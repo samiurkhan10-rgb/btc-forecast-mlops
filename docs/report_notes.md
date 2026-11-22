@@ -137,3 +137,70 @@ Flask's test client. Gunicorn itself is shown running in the Docker container in
 2. Terminal: `flake8 .` (clean) and `black --check .` ("would be left unchanged").
 3. Terminal: `python -m src.cli all` output (fetch → train → promoted with metrics).
 4. Sample `/predict` and `/health` JSON. Re-take these against the container in Part B for a nicer screenshot.
+
+---
+
+## Part B: Containerization & CI/CD
+
+### Files
+- `app/Dockerfile`: multi-stage. The builder stage creates `/opt/venv` from `requirements-api.txt` only;
+  the runtime stage is `python:3.10-slim` + that venv + only the 5 `src/` modules the API imports + `app/`.
+  Non-root user `app` (UID 10001), `HEALTHCHECK` on `/health`, gunicorn as PID 1 via `exec`
+  (receives SIGTERM → graceful shutdown), 2 sync workers, `--worker-tmp-dir /dev/shm`.
+  Layer caching: requirements are copied before code, and a BuildKit pip cache mount means re-builds don't re-download wheels.
+- `docker/Dockerfile.train`: same pattern, `requirements-train.txt`, `ENTRYPOINT python -m src.cli`, default `all`.
+- `docker/Dockerfile.airflow`: `apache/airflow:slim-2.10.5-python3.10` + `apache-airflow[postgres]` with the official
+  constraints file + a separate `/opt/ml-venv` for the ML code (see the dependency conflict below).
+- `docker-compose.yml`: three services (`postgres`, `airflow` running `airflow standalone` with LocalExecutor,
+  `api`). `./models` is shared: Airflow writes it, the API mounts it read-only. Memory limits keep the laptop usable.
+  The Airflow reload task calls `http://api:5000/reload`, using the compose service name.
+- `.github/workflows/ci_cd.yml`: `lint` (flake8 + black) and `test` (pytest + coverage, reports uploaded) on
+  push/PR, pip caching on Python 3.10. `build-and-push` runs only on push to main after both pass: buildx,
+  Docker Hub login from secrets, API and train images tagged `${{ github.sha }}` and `latest`, GHA layer
+  cache, then a smoke test of the pushed API image (`/health` 200 with model_loaded=false, `/predict` 503).
+
+### Image sizes
+| Image | Uncompressed | Compressed (registry) |
+|---|---|---|
+| samiurk/btc-forecast-api | 376 MB | 122 MB |
+| samiurk/btc-forecast-train | (see below) | |
+
+Breakdown of the API venv (248 MB): scipy 85 MB + scipy.libs 27 MB, pandas 38 MB, numpy 29 MB +
+numpy.libs 27 MB, xgboost 18 MB. **scipy is a hard dependency**: `xgboost/core.py` does
+`import scipy.sparse` at import time, so it can't be dropped. The < 300 MB target was not met.
+Size was accepted as is: it's already minimal for XGBoost+pandas on python:3.10-slim (no
+compilers, no pip/setuptools, no test suites, CPU-only xgboost wheel avoids the ~200 MB NCCL library).
+
+### Issue 1: first image built "successfully" but could not import xgboost
+To shrink the image, every `tests/` directory in site-packages was deleted. That also removed
+`numpy/_core/tests`, which `numpy.testing` needs at import time, and scipy imports `numpy.testing`:
+```text
+ModuleNotFoundError: No module named 'numpy._core.tests'
+```
+Fix: exclude numpy from the cleanup, and the builder stage now ends with
+`python -c "import xgboost, scipy.sparse, pandas, numpy, flask, gunicorn"`, so a broken
+image fails the **build** instead of failing in production. Lesson: size optimisations need a runtime check.
+
+### Issue 2: Docker engine crashed mid-build (disk full)
+```text
+ERROR: Could not install packages due to an OSError: [Errno 5] Input/output error
+ERROR: failed to build: ... error reading from server: EOF
+```
+Cause: C: had 2.1 GB free. Docker Desktop's WSL disk (`docker_data.vhdx`, 10.6 GB) lives on C: and
+could not grow, so the VM got I/O errors and the engine hung. Fix: moved the disk image to D:
+(Docker Desktop → Settings → Resources → Advanced → Disk image location), which kept all images,
+including minikube's node image. C: free space went from 2.1 GB to 16 GB.
+
+### Issue 3: Airflow constraints vs yfinance dependency conflict
+```text
+ERROR: Cannot install yfinance ... conflict is caused by:
+    curl-cffi 0.17.0 depends on cffi>=2.1.1
+    The user requested (constraint) cffi==1.17.1
+```
+Airflow 2.10.5's official constraints pin `cffi==1.17.1` (used by Airflow's crypto stack), while
+yfinance 1.8 → curl_cffi 0.17 needs cffi ≥ 2.1.1. Options considered: override the pin (breaks the
+"official constraints" guarantee), downgrade yfinance (old versions break when Yahoo changes its API), or
+**isolate the ML code** (chosen, and Airflow's documented pattern for conflicting deps): Airflow core
+is installed strictly with constraints, and the ML tasks run in `/opt/ml-venv` through
+`ExternalPythonOperator`. That venv uses the same `requirements-train.txt` as the train/API images,
+so the model is trained with exactly the library versions the API serves with.

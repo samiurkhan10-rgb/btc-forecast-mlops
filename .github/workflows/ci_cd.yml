@@ -1,0 +1,134 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older, still-running pipeline
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  lint:
+    name: Lint (flake8 + black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install linters (versions pinned in requirements-dev.txt)
+        run: pip install $(grep -E '^(flake8|black)==' requirements-dev.txt)
+      - name: flake8
+        run: flake8 .
+      - name: black --check
+        run: black --check --diff .
+
+  test:
+    name: Unit tests (pytest + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-api.txt
+            requirements-train.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        # locust is only for local load tests, so it is skipped here to keep CI fast
+        run: |
+          pip install -r requirements-train.txt
+          pip install $(grep -E '^(pytest|pytest-cov)==' requirements-dev.txt)
+      - name: Run pytest (all network calls are mocked)
+        run: pytest --cov-report=xml --junitxml=pytest-report.xml
+      - name: Upload test + coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            pytest-report.xml
+
+  build-and-push:
+    name: Build & push Docker images
+    needs: [lint, test]
+    # Only after lint + tests pass, and only for pushes to main (never for PRs)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      API_IMAGE: docker.io/${{ secrets.DOCKER_USERNAME }}/btc-forecast-api
+      TRAIN_IMAGE: docker.io/${{ secrets.DOCKER_USERNAME }}/btc-forecast-train
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & push API image (app/Dockerfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: app/Dockerfile
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build & push training image (docker/Dockerfile.train)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.train
+          push: true
+          tags: |
+            ${{ env.TRAIN_IMAGE }}:${{ github.sha }}
+            ${{ env.TRAIN_IMAGE }}:latest
+          cache-from: type=gha,scope=train
+          cache-to: type=gha,scope=train,mode=max
+
+      - name: Smoke test the pushed API image
+        run: |
+          docker run -d --name api-smoke -p 5000:5000 "$API_IMAGE:${{ github.sha }}"
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:5000/health; then break; fi
+            sleep 2
+          done
+          echo
+          # no model mounted -> /health must be 200 with model_loaded=false, /predict must be 503
+          curl -fsS http://localhost:5000/health | grep -q '"model_loaded":false'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:5000/predict)" = "503"
+          docker inspect --format '{{.Config.User}}' api-smoke
+          docker image ls "$API_IMAGE"
+          docker rm -f api-smoke
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed images"
+            echo "- \`$API_IMAGE:${{ github.sha }}\` and \`:latest\`"
+            echo "- \`$TRAIN_IMAGE:${{ github.sha }}\` and \`:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

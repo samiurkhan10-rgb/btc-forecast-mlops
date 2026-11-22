@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# Training / ETL image: used by the K8s training Job and the Kubeflow container components.
+# Build from the repo root:  docker build -f docker/Dockerfile.train -t samiurk/btc-forecast-train:local .
+# No airflow and no kfp inside: KFP container components just run `python -m src.cli ...`.
+
+FROM python:3.10-slim AS builder
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements-api.txt requirements-train.txt /tmp/
+ARG SP=/opt/venv/lib/python3.10/site-packages
+# pip download cache lives in a BuildKit cache mount: re-builds skip re-downloading wheels,
+# and the cache never ends up inside the image.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/requirements-train.txt \
+    # numpy is excluded because numpy.testing (imported by scipy) needs numpy/_core/tests
+    && find ${SP} -depth -type d -name tests -not -path "${SP}/numpy/*" -exec rm -rf {} + \
+    && find /opt/venv -name "*.pyx" -delete \
+    # the training image never serves HTTP, and pip/setuptools are install-time only
+    && pip uninstall -y gunicorn setuptools \
+    && python -m pip uninstall -y pip \
+    && python -c "import xgboost, scipy.sparse, pandas, numpy, yfinance, requests; print('imports ok')"
+
+FROM python:3.10-slim AS runtime
+LABEL org.opencontainers.image.title="btc-forecast-train" \
+      org.opencontainers.image.source="https://github.com/samiurkhan10-rgb/btc-forecast-mlops"
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    DATA_DIR=/app/data \
+    MODELS_DIR=/app/models \
+    MODEL_STAGE=production \
+    LOG_LEVEL=INFO
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+COPY --from=builder /opt/venv /opt/venv
+WORKDIR /app
+COPY src/ ./src/
+RUN mkdir -p /app/data /app/models && chown app:app /app/data /app/models
+USER 10001:10001
+
+ENTRYPOINT ["python", "-m", "src.cli"]
+CMD ["all"]

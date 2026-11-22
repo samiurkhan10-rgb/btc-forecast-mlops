@@ -1,0 +1,94 @@
+# Local integration environment: Postgres + ONE Airflow container + the Flask API.
+#   docker compose up -d --build        (needs a .env file: copy .env.example)
+#   Airflow UI  -> http://localhost:8080   (admin / AIRFLOW_ADMIN_PASSWORD from .env)
+#   API         -> http://localhost:5000/health
+# Do NOT run this at the same time as minikube on a low-memory machine.
+name: btc-forecast
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: samiurk/btc-forecast-api:local
+    environment:
+      API_KEY: ${API_KEY:?set API_KEY in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MODEL_STAGE: ${MODEL_STAGE:-production}
+      MODELS_DIR: /app/models
+    volumes:
+      - ./models:/app/models:ro # API only READS models; Airflow writes them
+    ports:
+      - "5000:5000"
+    mem_limit: 512m
+    restart: unless-stopped
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.airflow
+    image: btc-forecast-airflow:2.10.5
+    command: standalone # scheduler + webserver + triggerer in ONE container
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__PARALLELISM: "4" # low-resource laptop
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__WEBSERVER__WORKERS: "1" # default is 4 gunicorn workers (~150 MB each)
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-local-dev-only}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "60"
+      # the official entrypoint migrates the DB and creates the admin user on start
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+      # project settings used by the DAG / src code
+      DATA_DIR: /opt/airflow/data
+      MODELS_DIR: /opt/airflow/models
+      MODEL_STAGE: ${MODEL_STAGE:-production}
+      MAPE_THRESHOLD: ${MAPE_THRESHOLD:-10}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      API_RELOAD_URL: http://api:5000/reload # compose service name "api"
+      API_KEY: ${API_KEY:?set API_KEY in .env}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src:ro
+      - ./data:/opt/airflow/data
+      - ./models:/opt/airflow/models
+      - airflow-logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-s", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    mem_limit: 2g
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  airflow-logs:

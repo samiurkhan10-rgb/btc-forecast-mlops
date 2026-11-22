@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# Local Airflow image: official SLIM image (smaller download) + Postgres driver,
+# plus a SEPARATE virtualenv for our ML code.
+#
+# Why two environments: Airflow 2.10.5's official constraints pin cffi==1.17.1, while
+# yfinance 1.8 needs curl_cffi>=0.17 -> cffi>=2.1.1. Instead of overriding Airflow's pins
+# (risking its own crypto stack) the ML tasks run in /opt/ml-venv via ExternalPythonOperator.
+# That venv uses requirements-train.txt, i.e. the SAME numpy/pandas/xgboost versions as the
+# API and training images, so Airflow-trained models match what the API serves.
+FROM apache/airflow:slim-2.10.5-python3.10
+
+ARG AIRFLOW_VERSION=2.10.5
+ARG PYTHON_VERSION=3.10
+ARG CONSTRAINTS_URL=https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt
+
+USER airflow
+
+# 1) Airflow core + postgres extra (psycopg2 + provider), strictly with the official constraints.
+#    Pinning apache-airflow itself stops pip from up/downgrading Airflow while resolving.
+#    The BuildKit cache mount keeps downloaded wheels between builds without storing them
+#    in the image (uid 50000 = the image's "airflow" user).
+RUN --mount=type=cache,target=/home/airflow/.cache/pip,uid=50000 \
+    pip install "apache-airflow[postgres]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINTS_URL}"
+
+# 2) Isolated ML environment, identical pins to the training/API images.
+COPY requirements-api.txt requirements-train.txt /tmp/
+USER root
+RUN mkdir -p /opt/ml-venv && chown airflow:0 /opt/ml-venv
+USER airflow
+RUN --mount=type=cache,target=/home/airflow/.cache/pip,uid=50000 \
+    python -m venv /opt/ml-venv \
+    && /opt/ml-venv/bin/pip install -r /tmp/requirements-train.txt \
+    && /opt/ml-venv/bin/pip uninstall -y gunicorn \
+    && /opt/ml-venv/bin/python -c "import xgboost, pandas, yfinance; print('ml-venv imports ok')"
+
+# Shared project code (src/) is bind-mounted at /opt/airflow/src by docker-compose;
+# /opt/airflow on PYTHONPATH lets both Airflow and /opt/ml-venv `import src...`.
+ENV PYTHONPATH=/opt/airflow \
+    ML_PYTHON=/opt/ml-venv/bin/python
