@@ -30,7 +30,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/app/data \
     MODELS_DIR=/app/models \
     MODEL_STAGE=production \
-    LOG_LEVEL=INFO
+    LOG_LEVEL=INFO \
+    # the non-root user has no home dir: give yfinance (platformdirs) a writable cache dir
+    XDG_CACHE_HOME=/tmp/.cache
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 COPY --from=builder /opt/venv /opt/venv

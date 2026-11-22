@@ -1,0 +1,161 @@
+# PIPELINE DEFINITION
+# Name: btc-forecast-training
+# Description: Daily BTC-USD ingestion, feature generation and XGBoost 7-day training
+components:
+  comp-generate-features:
+    executorLabel: exec-generate-features
+    inputDefinitions:
+      artifacts:
+        raw_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        features:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-ingest-data:
+    executorLabel: exec-ingest-data
+    outputDefinitions:
+      artifacts:
+        raw_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        features:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-generate-features:
+      container:
+        args:
+        - features
+        - --raw
+        - '{{$.inputs.artifacts[''raw_data''].path}}'
+        - --out
+        - '{{$.outputs.artifacts[''features''].path}}'
+        command:
+        - python
+        - -m
+        - src.cli
+        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 0.25
+          memoryLimit: 1.073741824
+          memoryRequest: 0.268435456
+          resourceCpuLimit: '1'
+          resourceCpuRequest: 250m
+          resourceMemoryLimit: 1Gi
+          resourceMemoryRequest: 256Mi
+    exec-ingest-data:
+      container:
+        args:
+        - fetch
+        - --out
+        - '{{$.outputs.artifacts[''raw_data''].path}}'
+        command:
+        - python
+        - -m
+        - src.cli
+        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 0.25
+          memoryLimit: 1.073741824
+          memoryRequest: 0.268435456
+          resourceCpuLimit: '1'
+          resourceCpuRequest: 250m
+          resourceMemoryLimit: 1Gi
+          resourceMemoryRequest: 256Mi
+    exec-train-model:
+      container:
+        args:
+        - train
+        - --features
+        - '{{$.inputs.artifacts[''features''].path}}'
+        - --out-dir
+        - '{{$.outputs.artifacts[''model''].path}}'
+        - --metrics-out
+        - '{{$.outputs.artifacts[''metrics''].path}}'
+        command:
+        - python
+        - -m
+        - src.cli
+        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 0.25
+          memoryLimit: 1.073741824
+          memoryRequest: 0.268435456
+          resourceCpuLimit: '1'
+          resourceCpuRequest: 250m
+          resourceMemoryLimit: 1Gi
+          resourceMemoryRequest: 256Mi
+pipelineInfo:
+  description: Daily BTC-USD ingestion, feature generation and XGBoost 7-day training
+  name: btc-forecast-training
+root:
+  dag:
+    tasks:
+      generate-features:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-generate-features
+        dependentTasks:
+        - ingest-data
+        inputs:
+          artifacts:
+            raw_data:
+              taskOutputArtifact:
+                outputArtifactKey: raw_data
+                producerTask: ingest-data
+        taskInfo:
+          name: generate-features
+      ingest-data:
+        cachingOptions: {}
+        componentRef:
+          name: comp-ingest-data
+        retryPolicy:
+          backoffDuration: 60s
+          backoffFactor: 2.0
+          backoffMaxDuration: 3600s
+          maxRetryCount: 3
+        taskInfo:
+          name: ingest-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - generate-features
+        inputs:
+          artifacts:
+            features:
+              taskOutputArtifact:
+                outputArtifactKey: features
+                producerTask: generate-features
+        taskInfo:
+          name: train-model
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.18.1
