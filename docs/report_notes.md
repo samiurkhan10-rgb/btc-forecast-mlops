@@ -236,6 +236,8 @@ Docker Hub (public):
 Links: https://github.com/samiurkhan10-rgb/btc-forecast-mlops/actions ·
 https://hub.docker.com/r/samiurk/btc-forecast-api · https://hub.docker.com/r/samiurk/btc-forecast-train
 
+KFP YAML final pin: `docker.io/samiurk/btc-forecast-train:8858a4392b3a7f7ceeab9d46beaa554c305d1b82` (image built by CI for commit 8858a43, includes the XDG_CACHE_HOME fix).
+
 ### Screenshots for Part B
 1. Terminal: `docker build` of the API image (end of output, including `imports ok`) and `docker images` with the sizes.
 2. Terminal: `docker compose ps` showing all 3 services **healthy**, plus `docker stats --no-stream`.
@@ -244,3 +246,110 @@ https://hub.docker.com/r/samiurk/btc-forecast-api · https://hub.docker.com/r/sa
 5. GitHub → Actions → run for commit 3f7999f: the graph with lint, test → build-and-push all green.
 6. GitHub → the build-and-push job expanded, showing "Log in to Docker Hub", both pushes and "Smoke test" green.
 7. Docker Hub → `samiurk/btc-forecast-api` Tags tab showing the SHA tag and `latest` (and the train repo).
+
+---
+
+## Part C: Airflow ETL DAG & Kubeflow pipeline
+
+### Airflow DAG (`dags/btc_etl_pipeline.py`)
+`@daily`, `start_date 2026-11-01`, `catchup=False`, `max_active_runs=1`,
+`retries=2` with exponential backoff, 20 min `execution_timeout`.
+
+| Task | Operator | Runs in | What it does |
+|---|---|---|---|
+| fetch_data | ExternalPythonOperator | /opt/ml-venv | `src.etl_fetch.run_fetch()`: yfinance → CoinGecko → Binance, retries |
+| build_features | ExternalPythonOperator | /opt/ml-venv | `src.features.run_features()`: MA7/MA30, volatility, lagged returns, target |
+| train_and_evaluate | ExternalPythonOperator | /opt/ml-venv | `src.train_forecast.train()`: XGBoost + recursive 7-day holdout metrics → staging |
+| quality_gate | ShortCircuitOperator | Airflow | pass if MAPE ≤ `mape_threshold` (DAG param, default env MAPE_THRESHOLD=10) |
+| register_model | PythonOperator | Airflow | `src.registry.promote()`: atomic swap into models/production, prune staging |
+| reload_api | PythonOperator | Airflow | `POST http://api:5000/reload` with X-API-Key; verifies the served version |
+
+If the gate fails, `register_model` and `reload_api` are **skipped** (not failed), and the API keeps
+serving the previous model. Only small JSON values go through XCom; data and models go through the
+shared volume.
+
+### Run 1: scheduled run (unpaused → scheduler created the 2026-11-21 interval run)
+```text
+run scheduled__2026-11-21T00:00:00+00:00   success   22:28:19 -> 22:30:24 (~2 min)
+fetch_data         success  fetched BTC data source=yfinance rows=1096 (2023-11-22..2026-11-21)
+build_features     success
+train_and_evaluate success  model trained version=20261122T222954Z mae=2529.52 rmse=3465.34 mape=4.185
+quality_gate       success  candidate 20261122T222954Z: MAPE=4.185% (naive baseline 3.613%), threshold=10.0% -> PASS
+register_model     success  promoted model version 20261122T222954Z to /opt/***/models/production
+reload_api         success  API reload response: {'reloaded': True, 'model_version': '20261122T222954Z', ...}
+$ curl localhost:5000/health -> "model_version":"20261122T222954Z"   (was 20261122T200335Z)
+```
+Notes:
+- `changed: False` in the reload response: the gunicorn worker's own 5 s `version.txt` check had
+  already picked up the new model before `/reload` arrived. This is the multi-worker design from Part A working;
+  the task asserts that the API serves exactly the registered version.
+- `/opt/***/` is Airflow's secret masker hiding the word "airflow" because it equals the local
+  Postgres password (local-dev credentials only).
+
+### Run 2: gate rejection demo (manual trigger with config)
+```text
+$ airflow dags trigger btc_etl_pipeline -r manual__gate_fail_demo -c '{"mape_threshold": 1}'
+fetch_data success | build_features success | train_and_evaluate success | quality_gate success
+register_model skipped | reload_api skipped                      run state: success
+candidate 20261122T223422Z: MAPE=4.185% (naive baseline 3.613%), threshold=1.0% -> FAIL - production model unchanged
+$ curl localhost:5000/health -> "model_version":"20261122T222954Z"   (unchanged)
+```
+
+### Kubeflow pipeline (`kubeflow/btc_kfp_pipeline.py` → `btc_kfp_pipeline.yaml`)
+- KFP v2 SDK 2.18.1, three `@dsl.container_component`s: `ingest_data` → `generate_features` →
+  `train_model`, each running `python -m src.cli …` in `samiurk/btc-forecast-train`. That's the same
+  `src/` code as Airflow and the K8s Job; the image contains no kfp (KFP's launcher handles artifacts).
+- Artifacts: `raw_data: Dataset` → `features: Dataset` → `model: Model` + `metrics: Metrics`.
+- Ingest has caching disabled (new data daily) and 3 retries with backoff. Every step requests 250m CPU / 256Mi
+  and is limited to 1 CPU / 1Gi.
+- The YAML is pinned to an **immutable SHA tag** of the train image, not `:latest`, for reproducibility.
+- Compiled locally in a separate venv (`.venv-kfp`) so kfp's pins can't affect the project venv:
+```text
+$ python kubeflow/btc_kfp_pipeline.py --image-tag <sha>
+compiled kubeflow/btc_kfp_pipeline.yaml with image docker.io/samiurk/btc-forecast-train:<sha>
+```
+- No Kubeflow cluster was installed (too heavy for the laptop). Instead, the exact commands from the
+  compiled YAML were run in the train image with a shared volume as artifact storage:
+```text
+ingest_data       -> /kfp/ingest/raw_data
+generate_features -> /kfp/features/features
+train_model       -> /kfp/train/model/20261122T224522Z/{model.json,metrics.json,...}, /kfp/train/metrics (mape 4.185)
+```
+
+### Issue 4: compiled YAML ignored the requested image tag
+The first compile still said `:latest`: KFP builds a container component's `ContainerSpec` when the
+decorator runs at import time, so changing a module-level variable afterwards had no effect. Fix:
+a `build_pipeline(image)` factory defines the components after the image is known. A CI test now
+fails if the YAML uses `:latest` or more than one image.
+
+### Issue 5: yfinance cache warnings in the non-root container
+`Permission denied: '/home/app'`: the non-root user has no home directory, so yfinance could not
+cache Yahoo's timezone/cookie data and re-downloaded it on every run. Fix: `XDG_CACHE_HOME=/tmp/.cache`
+in `Dockerfile.train`.
+
+### CI coverage of orchestration code
+`tests/test_pipelines.py` checks the DAG with `ast` (schedule `@daily`, `catchup=False`, retries, the 6
+task ids, 1 short-circuit + 3 external-python tasks) and the KFP YAML as text (3 components,
+Dataset/Model/Metrics, single SHA-pinned image), without installing Airflow or kfp in CI.
+70 tests pass.
+
+### Airflow 2.10.5 end-of-life and moving to 3.x
+Airflow 2.x is past end-of-life. 2.10.5 was used because it is lighter (a single `airflow standalone`
+container fits the 6 GB WSL limit) and widely documented. Moving to Airflow 3.x would involve:
+- `airflow webserver` → `airflow api-server` (FastAPI). The DAG processor becomes a mandatory separate process.
+- Tasks talk to the metadata DB through the Task Execution API / Task SDK (`airflow.sdk`), not directly.
+  Imports move from `airflow.decorators`/`airflow.models` to `airflow.sdk` (`dag`, `task`, `Param`).
+- Removed context variables such as `execution_date` (use `logical_date`). `schedule_interval` is gone
+  (this DAG already uses `schedule=`). `catchup` defaults to False.
+- Provider packages and the constraints file change. Re-check the cffi/yfinance conflict; the isolated
+  `/opt/ml-venv` design carries over unchanged.
+- Run `airflow db migrate` and the `ruff` AIR3xx rules to find incompatible DAG code.
+
+### Screenshots for Part C
+1. Airflow UI → DAGs list showing `btc_etl_pipeline` (schedule @daily, tags, 2 successful runs).
+2. Airflow UI → btc_etl_pipeline → **Graph** view of the scheduled run: all 6 tasks green.
+3. Airflow UI → Graph view of `manual__gate_fail_demo`: register_model / reload_api **skipped** (pink).
+4. Airflow UI → quality_gate task → Logs for each run (the PASS and FAIL lines).
+5. Airflow UI → reload_api → Logs showing the API reload response.
+6. Terminal: `curl localhost:5000/health` before/after showing the version change.
+7. VS Code: `kubeflow/btc_kfp_pipeline.yaml` (components + SHA-pinned image) and the compile command output.

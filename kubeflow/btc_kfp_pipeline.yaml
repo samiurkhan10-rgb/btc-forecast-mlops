@@ -56,7 +56,7 @@ deploymentSpec:
         - python
         - -m
         - src.cli
-        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        image: docker.io/samiurk/btc-forecast-train:8858a4392b3a7f7ceeab9d46beaa554c305d1b82
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.25
@@ -76,7 +76,7 @@ deploymentSpec:
         - python
         - -m
         - src.cli
-        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        image: docker.io/samiurk/btc-forecast-train:8858a4392b3a7f7ceeab9d46beaa554c305d1b82
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.25
@@ -100,7 +100,7 @@ deploymentSpec:
         - python
         - -m
         - src.cli
-        image: docker.io/samiurk/btc-forecast-train:ac03faf4f7ee0bc4497922578c8e6bbe2b5e0a9d
+        image: docker.io/samiurk/btc-forecast-train:8858a4392b3a7f7ceeab9d46beaa554c305d1b82
         resources:
           cpuLimit: 1.0
           cpuRequest: 0.25
