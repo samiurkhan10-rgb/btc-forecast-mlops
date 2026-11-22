@@ -1,0 +1,7 @@
+# Runtime dependencies of the Flask prediction service ONLY (kept minimal for a small image).
+flask==3.1.3
+gunicorn==23.0.0
+pandas==2.2.3
+numpy==2.2.6
+# CPU-only XGBoost build: avoids the ~200 MB nvidia-nccl dependency of the plain "xgboost" wheel
+xgboost-cpu==3.2.0

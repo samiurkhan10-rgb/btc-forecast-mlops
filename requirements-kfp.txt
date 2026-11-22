@@ -1,0 +1,3 @@
+# Only needed locally to compile kubeflow/btc_kfp_pipeline.py -> YAML.
+# Container components run plain commands, so no image needs kfp at runtime.
+kfp==2.18.1

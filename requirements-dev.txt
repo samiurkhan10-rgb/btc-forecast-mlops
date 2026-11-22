@@ -1,0 +1,7 @@
+# Local development + CI tooling (never installed into images).
+-r requirements-train.txt
+pytest==9.2.0
+pytest-cov==7.1.0
+flake8==7.4.1
+black==26.10.1
+locust==2.46.0

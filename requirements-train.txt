@@ -1,0 +1,4 @@
+# Training / ETL dependencies (Airflow image, K8s train Job, KFP components).
+-r requirements-api.txt
+yfinance==1.8.0
+requests==2.34.2

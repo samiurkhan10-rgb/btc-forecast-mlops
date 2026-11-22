@@ -1,0 +1,19 @@
+# Normalise line endings: always LF in the repo and in the working tree,
+# so scripts/Dockerfiles copied into Linux containers never get CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ubj binary

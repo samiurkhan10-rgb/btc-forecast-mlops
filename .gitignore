@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+
+# Secrets / local config
+.env
+*.env
+!.env.example
+
+# Data and model artifacts (produced by the pipeline, never committed)
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+*.ubj
+*.pkl
+*.joblib
+
+# Airflow runtime files
+airflow_home/
+logs/
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# Load-test output
+loadtest/results/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
