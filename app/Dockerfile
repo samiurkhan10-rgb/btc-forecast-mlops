@@ -43,7 +43,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LOG_LEVEL=INFO \
     PORT=5000 \
     GUNICORN_WORKERS=2 \
-    GUNICORN_THREADS=4
+    GUNICORN_THREADS=4 \
+    # keep-alive > a reverse proxy's upstream keepalive (ingress-nginx: 60 s) avoids 502 races
+    GUNICORN_CMD_ARGS="--keep-alive 75"
 
 # Dedicated unprivileged user (fixed UID so K8s securityContext can reference it)
 RUN groupadd --system --gid 10001 app \

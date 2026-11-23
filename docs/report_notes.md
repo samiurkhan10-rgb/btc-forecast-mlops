@@ -353,3 +353,128 @@ container fits the 6 GB WSL limit) and widely documented. Moving to Airflow 3.x 
 5. Airflow UI → reload_api → Logs showing the API reload response.
 6. Terminal: `curl localhost:5000/health` before/after showing the version change.
 7. VS Code: `kubeflow/btc_kfp_pipeline.yaml` (components + SHA-pinned image) and the compile command output.
+
+---
+
+## Part D: Kubernetes deployment & scaling (minikube v1.39, Kubernetes v1.34.0, docker driver)
+
+Sequence: `docker compose down` → `minikube start` (all addon images cached). Note: `minikube addons list`
+shows ingress as "disabled", but the ingress-nginx controller from the earlier `addons enable` is installed
+and Running (IngressClass `nginx` present), so it was left untouched.
+
+### Manifests (`k8s/`, namespace `btc-forecast`)
+| File | Content |
+|---|---|
+| namespace.yaml | `btc-forecast` namespace |
+| configmap-secret.yaml | ConfigMap `MODEL_STAGE`, `LOG_LEVEL`, `PORT`, `MODELS_DIR`, `MAPE_THRESHOLD`, `GUNICORN_CMD_ARGS`; Secret `API_KEY`, `COINGECKO_API_KEY` (**placeholder in git**; the real key is applied from `.env` with `kubectl create secret generic ... --dry-run=client -o yaml`, piped to `kubectl apply -f -`) |
+| pvc.yaml | `btc-models-pvc` 1Gi **RWO**, storageClass `standard`, mounted at `/app/models` |
+| deployment.yaml | 3 replicas, CI image pinned by commit SHA, `IfNotPresent`, requests 100m/128Mi, limits 500m/512Mi, startup + liveness (15 s/10 s) + readiness probes on `/health`, `envFrom` ConfigMap + Secret, non-root 10001, read-only root FS, all capabilities dropped, PVC mounted read-only |
+| service.yaml | `btc-api` ClusterIP 80→5000 and `btc-api-nodeport` NodePort 80→5000 (nodePort 30080) |
+| hpa.yaml | autoscaling/v2, min 2, max 8, CPU 60%; scale-up 2 pods / 30 s, scale-down 1 pod / 30 s after 120 s |
+| ingress.yaml | `ingressClassName: nginx`, host `btc-forecast.local` → `btc-api:80` |
+| train-job.yaml | Job running the CI train image `all` → writes the model (and `data/`) into the PVC |
+
+Image delivery: the CI-built images were pulled once into the node
+(`minikube ssh -- sudo crictl pull docker.io/samiurk/btc-forecast-{api,train}:<sha>`, about 4 min on the
+slow link). With `imagePullPolicy: IfNotPresent` no further downloads happen. `minikube image load`
+was not needed.
+
+**Limitation (RWO PVC):** ReadWriteOnce works because minikube has a single node: the train Job and
+all API replicas are on the same node. A multi-node cluster needs ReadWriteMany storage (NFS/CephFS/EFS)
+or an object store (S3/MinIO) for model artifacts.
+
+### Bring-up
+```text
+$ kubectl apply -f k8s/   (namespace, configmap-secret, pvc, deployment, service, hpa, ingress)
+deployment "btc-api" successfully rolled out          3/3 Running, PVC Bound (pvc-f323c763...)
+pod: uid=10001(app); touch /app/x -> Read-only file system; API_KEY set: yes
+GET /health  -> {"status":"ok","model_loaded":false,"model_version":null}   (empty PVC, probes pass)
+POST /predict -> 503 {"error":"model not loaded yet - run the training pipeline first"}
+
+$ kubectl apply -f k8s/train-job.yaml
+job.batch/btc-train   Complete   1/1   51s
+fetched BTC data source=yfinance rows=1096 | model trained version=20261122T234248Z mape=4.185 | promoted: true
+all 3 replicas -> "model_loaded":true,"model_version":"20261122T234248Z"   (no restart, 5 s version check)
+PVC: /app/models/{production,staging,data}
+```
+Rolling updates later replaced every pod; the new pods loaded the same model straight from the PVC
+(persistence across pod restarts, D2).
+
+### External access
+```text
+NodePort: minikube service btc-api-nodeport -n btc-forecast --url  -> http://127.0.0.1:29385
+  (docker driver on Windows: the node IP 192.168.49.2 is not routable from Windows, so minikube tunnels it)
+  GET /health 200, POST /predict 200 (7 predictions, 2026-11-22 60670.17 ... 2026-11-28 60765.99)
+Ingress: hosts file "127.0.0.1 btc-forecast.local" + `minikube tunnel` (Administrator)
+  curl http://btc-forecast.local/health -> HTTP 200 in 0.05 s
+  Host: other.local -> HTTP 404 (host-based routing)
+  ingress-nginx log: "POST /predict HTTP/1.1" 200 ... [btc-forecast-btc-api-80] 10.244.0.6:5000
+```
+
+### HPA load tests (Locust, 60 users, spawn 5/s, 4 min, via the Ingress)
+`.venv\Scripts\locust -f loadtest\locustfile.py --host http://btc-forecast.local --headless -u 60 -r 5 -t 4m`
+(/predict weight 3 with 7/14/30-day horizons, /health weight 1)
+
+| Run | Change | Requests | Failures | req/s | Median /predict | Pod restarts | HPA |
+|---|---|---|---|---|---|---|---|
+| 1 | baseline | 3,769 | **90.55 %** (503/502) | 15.9 | 78 ms* | 14 | 2→4→6→8 |
+| 2 | NumPy fast path + gthread + softer liveness | 7,386 | 0.43 % (502) | 30.9 | 1,100 ms | 1 | 2→3→5→7→8 |
+| 3 | + startupProbe | 7,057 | 0.45 % (502) | 29.5 | 1,200 ms | **0** | 2→4→6→8 |
+| 4 | + gunicorn keep-alive 75 s | 7,315 | **0.00 %** | 30.6 | 1,100 ms | **0** | 2→4→6→8 |
+
+\* Run 1's median is low only because most requests failed fast with 503.
+
+Run 4 HPA timeline (`kubectl get hpa --watch`):
+```text
+05:32:52  cpu: 2%/60%    replicas 2
+05:33:22  cpu: 65%/60%   replicas 2
+05:34:23  cpu: 467%/60%  replicas 2
+05:34:38  cpu: 467%/60%  replicas 4
+05:35:10  cpu: 467%/60%  replicas 6
+05:35:43  cpu: 402%/60%  replicas 8   (maxReplicas)
+05:36:16  cpu: 204%/60%  replicas 8
+node CPU (kubectl top node): 407m -> 747m -> 1482m -> 1854m -> 1999m   (2-vCPU minikube limit)
+```
+After the test the HPA scaled back down to minReplicas=2 (one pod / 30 s after the 120 s window).
+
+### Problems found by the load test and their fixes
+1. **Slow inference.** `/predict` (7 days) took about 420 ms in the pod. cProfile: about 80 % went into building a one-row
+   pandas DataFrame per recursive step (47 ms/step) vs 5 ms for XGBoost. Fix: `next_step_vector()` in
+   NumPy (7-day forecast 324 ms → 15 ms, 30-day 66 ms locally), with identical predictions, enforced by two
+   new parity tests (every training row, and a 14-step forecast vs a pandas reference loop).
+2. **Liveness probes killing busy pods.** Sync gunicorn workers serve one request at a time, so `/health`
+   probes queued behind `/predict`, timed out after 3 s, and the kubelet restarted healthy-but-busy
+   pods. Events: `Liveness probe failed: context deadline exceeded`, exit code 0 (graceful kill, no OOM).
+   The surviving pods got more load, so the failure cascaded and NGINX returned 503 (no ready endpoints).
+   Fix: `gthread` (still 2 workers, 4 threads each); liveness timeout 5 s × 5 failures ("frozen", not
+   "busy"); readiness stays strict (busy pods leave the endpoints briefly instead of restarting).
+3. **Pods restarted while still booting.** A pod created on the saturated node booted slowly and liveness got
+   `connection refused`. Fix: `startupProbe` (up to 120 s); liveness/readiness start after it passes.
+4. **Rare 502s (0.45 %): keep-alive race.** NGINX log: `recv() failed (104: Connection reset by peer) while
+   reading response header from upstream`, with no errors in gunicorn. ingress-nginx keeps upstream keepalive
+   connections for 60 s, gunicorn's default keep-alive is 2 s, so gunicorn closed connections NGINX was about
+   to reuse. Fix: `--keep-alive 75` via `GUNICORN_CMD_ARGS` in the ConfigMap (no rebuild needed; same default
+   added to the Dockerfile). Verified: a connection idle for 70 s is still reused. Result: 0 failures.
+
+### Performance analysis
+- Capacity is **CPU-bound at the node**: node CPU reaches 1,999m (the 2-vCPU minikube limit) with 6–8 pods.
+  Pods 6–8 add almost no throughput (about 30 req/s ceiling). The HPA scales pods correctly, but a real cluster
+  would also need the Cluster Autoscaler to add nodes.
+- 60 users is above the cluster's capacity, so requests queue (median 1.1 s, p95 4.1 s for /predict).
+  Each /predict costs about 15–70 ms of CPU depending on the horizon. Under capacity the latency is that service time.
+- CPU utilisation is measured against the 100m **request**: 467 % ≈ 467m per pod, close to the 500m limit
+  (pods were CPU-throttled), which is why the HPA immediately asks for the maximum.
+- HPA vs Deployment: the Deployment declares 3 replicas, the HPA minimum is 2. Re-applying
+  `deployment.yaml` briefly resets to 3 until the HPA takes over again. In production, drop `replicas`
+  from the manifest once an HPA manages it.
+
+### Screenshots for Part D
+1. `kubectl -n btc-forecast get all,pvc,ingress,hpa` (pods, services, PVC Bound, HPA, ingress).
+2. `kubectl -n btc-forecast describe deploy btc-api` (probes, resources, env from ConfigMap/Secret, image SHA).
+3. `kubectl -n btc-forecast get cm btc-api-config -o yaml` and `get secret btc-api-secret` (no values shown).
+4. Train Job: `kubectl -n btc-forecast get job` + `logs job/btc-train` (fetched → trained → promoted).
+5. `minikube service btc-api-nodeport -n btc-forecast --url` + a `/predict` call to that URL.
+6. `Invoke-RestMethod http://btc-forecast.local/predict` through the Ingress + the tunnel window.
+7. **Side-by-side**: `kubectl get hpa --watch` and `kubectl get pods -w` during a Locust run (2 → 8 pods).
+8. Locust HTML report (`loadtest/results/run4_report.html`) charts: RPS, response times, users.
+9. Optional "before" evidence: run 1 report/failure table and `kubectl get events` with the liveness failures.

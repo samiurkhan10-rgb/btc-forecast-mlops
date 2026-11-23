@@ -33,7 +33,7 @@ spec:
       containers:
         - name: api
           # Image built and pushed by GitHub Actions, pinned to an immutable commit-SHA tag
-          image: docker.io/samiurk/btc-forecast-api:48cb72d790da3b2e2bafacc98501aefd5ae660d8
+          image: docker.io/samiurk/btc-forecast-api:b49c22cf04cce12d03bf1bf2daea2aa35899868a
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -50,6 +50,16 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          # Startup = "has it finished booting?" Liveness/readiness only start after this passes,
+          # so a pod created on a CPU-saturated node (slow Python/XGBoost import) gets up to
+          # 2 min to boot instead of being killed by liveness mid-startup (seen in load test 2).
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 4
+            timeoutSeconds: 3
+            failureThreshold: 30
           # Liveness = "is it FROZEN?" -> restart only after ~50 s without any answer.
           # (With timeout 3 s x 3 failures, the load test showed the kubelet killing pods that
           #  were merely BUSY, which cascaded into 503s. Busy pods are handled by readiness.)
