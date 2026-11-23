@@ -467,14 +467,82 @@ def arch_diagram():
 
 
 # ---------------------------------------------------------------- content
-story = []
+def cover_page():
+    """Title page in the FAST-NUCES assignment style."""
+    navy = colors.HexColor("#1B2A3A")
+    uni = ParagraphStyle(
+        "uni",
+        fontName="Arial-Bold",
+        fontSize=15,
+        leading=19,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#111111"),
+    )
+    small = ParagraphStyle("small", fontName="Arial", fontSize=8, leading=10, alignment=TA_CENTER)
+    big = ParagraphStyle(
+        "big", fontName="Arial-Bold", fontSize=40, leading=46, alignment=TA_CENTER, textColor=navy
+    )
+    subt = ParagraphStyle(
+        "subt",
+        fontName="Arial-Bold",
+        fontSize=13.5,
+        leading=17,
+        alignment=TA_CENTER,
+        textColor=navy,
+    )
+    tag = ParagraphStyle(
+        "tag", fontName="Arial", fontSize=8.5, leading=11, alignment=TA_CENTER, textColor=MUTED
+    )
+    lab = ParagraphStyle("lab", fontName="Arial-Bold", fontSize=9.5, leading=12)
+    val = ParagraphStyle("val", fontName="Arial", fontSize=9.5, leading=12)
+    rule = Table([[""]], colWidths=[7.5 * cm], rowHeights=[2])
+    rule.hAlign = "CENTER"
+    rule.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 0.8, MUTED)]))
+    rows = [
+        ("Name", "Sami ur Rehman Khan"),
+        ("Reg. No.", "25L-8005"),
+        ("Name", "Muhammad Faizan Aslam"),
+        ("Reg. No.", "25L-8011"),
+        ("Course Title", "AI5009 – MLOps for Cloud-Native Applications"),
+        ("Instructor", "Dr. Irfan Younas"),
+    ]
+    details = Table([[P(k, lab), P(v, val)] for k, v in rows], colWidths=[4 * cm, 8.5 * cm])
+    details.hAlign = "CENTER"
+    details.setStyle(
+        TableStyle(
+            [
+                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.HexColor("#EEF0F3"), colors.white]),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    logo = Image(str(SHOTS / "logo.png"), width=4.6 * cm, height=4.6 * cm)
+    logo.hAlign = "CENTER"
+    return [
+        Spacer(1, 1.2 * cm),
+        logo,
+        Spacer(1, 1.0 * cm),
+        P("National University of Computer and Emerging Sciences", uni),
+        P("(FAST-NUCES)", small),
+        Spacer(1, 6),
+        rule,
+        Spacer(1, 2.2 * cm),
+        P("Assignment 3", big),
+        Spacer(1, 4),
+        P("Production MLOps Pipeline for 7-Day BTC-USD Forecasting", subt),
+        Spacer(1, 2),
+        P("Flask · Docker · GitHub Actions · Airflow · Kubeflow · Kubernetes", tag),
+        Spacer(1, 1.6 * cm),
+        details,
+        PageBreak(),
+    ]
+
+
+story = cover_page()
 story += [
-    P("Production MLOps Pipeline for 7-Day BTC-USD Forecasting", title),
-    P(
-        "MLOps Assignment 3 · <b>Sami ur Rehman Khan (25L-8005)</b> · <b>Muhammad Faizan Aslam (25L-8011)</b>"
-        " · 23 November 2026",
-        sub,
-    ),
     P(
         "GitHub: github.com/samiurkhan10-rgb/btc-forecast-mlops · Docker Hub: hub.docker.com/r/samiurk/btc-forecast-api"
         " and hub.docker.com/r/samiurk/btc-forecast-train",
@@ -1088,11 +1156,13 @@ story += [
 
 
 def on_page(canv, doc):
+    if doc.page == 1:  # cover page: no footer
+        return
     canv.saveState()
     canv.setFont("Arial", 7.5)
     canv.setFillColor(MUTED)
     canv.drawString(MARGIN, 0.9 * cm, "MLOps Assignment 3 · BTC-USD 7-day forecasting pipeline")
-    canv.drawRightString(PAGE_W - MARGIN, 0.9 * cm, f"Page {doc.page}")
+    canv.drawRightString(PAGE_W - MARGIN, 0.9 * cm, f"Page {doc.page - 1}")
     canv.restoreState()
 
 
