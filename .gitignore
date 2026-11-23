@@ -40,3 +40,6 @@ loadtest/results/
 .idea/
 .DS_Store
 Thumbs.db
+
+# report screenshots (kept locally, not committed)
+screenshots/
