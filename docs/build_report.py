@@ -498,27 +498,89 @@ def cover_page():
     rule = Table([[""]], colWidths=[7.5 * cm], rowHeights=[2])
     rule.hAlign = "CENTER"
     rule.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 0.8, MUTED)]))
-    rows = [
-        ("Name", "Sami ur Rehman Khan"),
-        ("Reg. No.", "25L-8005"),
-        ("Name", "Muhammad Faizan Aslam"),
-        ("Reg. No.", "25L-8011"),
-        ("Course Title", "AI5009 – MLOps for Cloud-Native Applications"),
-        ("Instructor", "Dr. Irfan Younas"),
-    ]
-    details = Table([[P(k, lab), P(v, val)] for k, v in rows], colWidths=[4 * cm, 8.5 * cm])
-    details.hAlign = "CENTER"
-    details.setStyle(
+    kicker = ParagraphStyle(
+        "kicker",
+        fontName="Arial-Bold",
+        fontSize=8,
+        leading=10,
+        alignment=TA_CENTER,
+        textColor=MUTED,
+    )
+    th = ParagraphStyle("th", fontName="Arial-Bold", fontSize=9, leading=11, textColor=colors.white)
+    thc = ParagraphStyle("thc", parent=th, alignment=TA_CENTER)
+    name = ParagraphStyle("name", fontName="Arial-Bold", fontSize=11, leading=14, textColor=navy)
+    reg = ParagraphStyle(
+        "reg",
+        fontName="Arial",
+        fontSize=11,
+        leading=14,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#222222"),
+    )
+    members = Table(
+        [
+            [P("Group Member", th), P("Registration No.", thc)],
+            [P("Sami ur Rehman Khan", name), P("25L-8005", reg)],
+            [P("Muhammad Faizan Aslam", name), P("25L-8011", reg)],
+        ],
+        colWidths=[8 * cm, 4.5 * cm],
+    )
+    members.hAlign = "CENTER"
+    members.setStyle(
         TableStyle(
             [
-                ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.HexColor("#EEF0F3"), colors.white]),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("BACKGROUND", (0, 0), (-1, 0), navy),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F4F6F9")),
+                ("LINEBELOW", (0, 1), (-1, 1), 0.6, colors.HexColor("#D5DBE3")),
+                ("BOX", (0, 0), (-1, -1), 0.8, navy),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ]
         )
     )
+    meta_lab = ParagraphStyle(
+        "metalab",
+        fontName="Arial-Bold",
+        fontSize=7.5,
+        leading=10,
+        alignment=TA_CENTER,
+        textColor=MUTED,
+    )
+    meta_val = ParagraphStyle(
+        "metaval",
+        fontName="Arial-Bold",
+        fontSize=10.5,
+        leading=13.5,
+        alignment=TA_CENTER,
+        textColor=navy,
+    )
+    meta = Table(
+        [
+            [P("COURSE", meta_lab), P("INSTRUCTOR", meta_lab)],
+            [
+                P("AI5009 – MLOps for<br/>Cloud-Native Applications", meta_val),
+                P("Dr. Irfan Younas", meta_val),
+            ],
+        ],
+        colWidths=[6.25 * cm, 6.25 * cm],
+    )
+    meta.hAlign = "CENTER"
+    meta.setStyle(
+        TableStyle(
+            [
+                ("LINEABOVE", (0, 0), (0, 0), 2, colors.HexColor("#0B8FD6")),
+                ("LINEABOVE", (1, 0), (1, 0), 2, colors.HexColor("#0B8FD6")),
+                ("LINEAFTER", (0, 0), (0, -1), 0.6, colors.HexColor("#D5DBE3")),
+                ("TOPPADDING", (0, 0), (-1, 0), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 2),
+                ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    details = [P("SUBMITTED BY", kicker), Spacer(1, 6), members, Spacer(1, 0.9 * cm), meta]
     logo = Image(str(SHOTS / "logo.png"), width=4.6 * cm, height=4.6 * cm)
     logo.hAlign = "CENTER"
     return [
@@ -535,8 +597,8 @@ def cover_page():
         P("Production MLOps Pipeline for 7-Day BTC-USD Forecasting", subt),
         Spacer(1, 2),
         P("Flask · Docker · GitHub Actions · Airflow · Kubeflow · Kubernetes", tag),
-        Spacer(1, 1.6 * cm),
-        details,
+        Spacer(1, 1.5 * cm),
+        *details,
         PageBreak(),
     ]
 
