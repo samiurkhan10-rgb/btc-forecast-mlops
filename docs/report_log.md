@@ -548,7 +548,21 @@ POST /predict {"forecast_days":7} -> model 20261123T011108Z | last close 2026-11
 ```
 
 **4. Live K8s endpoint: Ingress** (http://btc-forecast.local, `minikube tunnel`):
-INGRESS_RESULT_PLACEHOLDER
+```text
+GET  /health  -> HTTP 200 in 0.03 s
+  {"status":"ok","model_loaded":true,"model_version":"20261123T011108Z","model_stage":"production"}
+POST /predict {"forecast_days":7} -> HTTP 200 in 0.08 s, model 20261123T011108Z
+  same 7 predictions as the NodePort (2026-11-22 60345.92 ... 2026-11-28 60730.09)
+Host: other.local -> HTTP 404   (host-based routing)
+```
+Note: `minikube stop`/`start` during E2 broke the running `minikube tunnel` (the process stayed alive, but
+nothing listened on port 80, so connections were refused). Fix: stop the stale tunnel process and run
+`minikube tunnel --cleanup`, then start it again.
+
+Second chaos run (for screenshots, run by hand): `delete pod btc-api-7d5ccc6cf7-sjvhv` → events
+`Killing` / `SuccessfulCreate btc-api-7d5ccc6cf7-lljzq` / `Pulled (already present)` / `Started`, one expected
+`Startup probe failed: connection refused` while gunicorn booted, then 1/1 Ready, RESTARTS 0. The new pod
+serves `20261123T011108Z` from the PVC.
 
 **5. GitHub Actions**: every push to main is green (lint → test → build-and-push):
 ```text
