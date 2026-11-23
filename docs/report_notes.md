@@ -171,7 +171,7 @@ screenshots cropped to the relevant part, about 1/3 page each, two per row where
 | E1 | pod deletion with timestamps + `get pods -w` | ☑ |
 | E2 | `get events` (SuccessfulCreate / Killing) | ☑ |
 | E3 | Airflow `manual__e2e_verification` grid/details | ☑ |
-| E4 | `/health` before/after the manual run | ☐ |
-| E5 | `kubectl cp` + promote + both pods' new version | ☐ |
-| E6 | NodePort + Ingress `/predict` with version 20261123T011108Z | ☐ |
-| E7 | GitHub Actions run list, all green | ☐ |
+| E4 | `/health` before/after the manual run | ☑ |
+| E5 | `kubectl cp` + promote + both pods' new version | ☑ |
+| E6 | NodePort + Ingress `/predict` with version 20261123T011108Z | ☑ |
+| E7 | GitHub Actions run list, all green | ☑ |
