@@ -144,33 +144,33 @@ screenshots cropped to the relevant part, about 1/3 page each, two per row where
 
 | ID | What | Taken? |
 |---|---|---|
-| A1 | `pytest` output with coverage table (72 passed) | ☐ |
-| A2 | `flake8` / `black --check` clean + `python -m src.cli all` output | ☐ |
-| B1 | `docker build` tail (`imports ok`) + `docker images` sizes | ☐ |
-| B2 | `docker compose ps` (3 healthy) + `docker stats --no-stream` | ☐ |
-| B3 | `/health` + `/predict` JSON from the compose API | ☐ |
-| B4 | Airflow UI home (v2.10.5) | ☐ |
-| B5 | GitHub Actions run graph: lint, test → build-and-push green | ☐ |
-| B6 | build-and-push job steps (login, pushes, smoke test) | ☐ |
-| B7 | Docker Hub Tags tab (SHA + latest) for both repos | ☐ |
-| C1 | Airflow DAG list with btc_etl_pipeline | ☐ |
-| C2 | Graph view: scheduled run, all 6 green | ☐ |
-| C3 | Graph view: `manual__gate_fail_demo`, register/reload skipped | ☐ |
-| C4 | quality_gate logs (PASS and FAIL lines) | ☐ |
-| C5 | reload_api log (API reload response) | ☐ |
-| C6 | `/health` before/after the DAG (version change) | ☐ |
-| C7 | `btc_kfp_pipeline.yaml` excerpt + compile command | ☐ |
-| D1 | `kubectl -n btc-forecast get all,pvc,ingress,hpa` | ☐ |
-| D2 | `kubectl describe deploy btc-api` (probes, resources, env) | ☐ |
-| D3 | ConfigMap YAML + `get secret` | ☐ |
-| D4 | train Job status + logs | ☐ |
-| D5 | NodePort URL + `/predict` | ☐ |
-| D6 | Ingress `/predict` (btc-forecast.local) + tunnel window | ☐ |
-| D7 | side-by-side `get hpa --watch` / `get pods -w` during Locust (2 → 8) | ☐ |
-| D8 | Locust HTML report charts (run4_report.html) | ☐ |
-| E1 | pod deletion with timestamps + `get pods -w` | ☐ |
-| E2 | `get events` (SuccessfulCreate / Killing) | ☐ |
-| E3 | Airflow `manual__e2e_verification` grid/details | ☐ |
+| A1 | `pytest` output with coverage table (72 passed) | ☑ |
+| A2 | `flake8` / `black --check` clean + `python -m src.cli all` output | ☑ |
+| B1 | `docker build` tail (`imports ok`) + `docker images` sizes | ☑ |
+| B2 | `docker compose ps` (3 healthy) + `docker stats --no-stream` | ☑ |
+| B3 | `/health` + `/predict` JSON from the compose API | ☑ |
+| B4 | Airflow UI home (v2.10.5) | ☑ |
+| B5 | GitHub Actions run graph: lint, test → build-and-push green | ☑ |
+| B6 | build-and-push job steps (login, pushes, smoke test) | ☑ |
+| B7 | Docker Hub Tags tab (SHA + latest) for both repos | ☑ |
+| C1 | Airflow DAG list with btc_etl_pipeline | ☑ |
+| C2 | Graph view: scheduled run, all 6 green | ☑ |
+| C3 | Graph view: `manual__gate_fail_demo`, register/reload skipped | ☑ |
+| C4 | quality_gate logs (PASS and FAIL lines) | ☑ |
+| C5 | reload_api log (API reload response) | ☑ |
+| C6 | `/health` before/after the DAG (version change) | ☑ |
+| C7 | `btc_kfp_pipeline.yaml` excerpt + compile command | ☑ |
+| D1 | `kubectl -n btc-forecast get all,pvc,ingress,hpa` | ☑ |
+| D2 | `kubectl describe deploy btc-api` (probes, resources, env) | ☑ |
+| D3 | ConfigMap YAML + `get secret` | ☑ |
+| D4 | train Job status + logs | ☑ |
+| D5 | NodePort URL + `/predict` | ☑ |
+| D6 | Ingress `/predict` (btc-forecast.local) + tunnel window | ☑ |
+| D7 | side-by-side `get hpa --watch` / `get pods -w` during Locust (2 → 8) | ☑ |
+| D8 | Locust HTML report charts (run4_report.html) | ☑ |
+| E1 | pod deletion with timestamps + `get pods -w` | ☑ |
+| E2 | `get events` (SuccessfulCreate / Killing) | ☑ |
+| E3 | Airflow `manual__e2e_verification` grid/details | ☑ |
 | E4 | `/health` before/after the manual run | ☐ |
 | E5 | `kubectl cp` + promote + both pods' new version | ☐ |
 | E6 | NodePort + Ingress `/predict` with version 20261123T011108Z | ☐ |
