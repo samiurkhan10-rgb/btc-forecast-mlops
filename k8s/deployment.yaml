@@ -1,0 +1,90 @@
+# D3: Flask prediction API - 3 replicas, probes, exact requests/limits, config from CM + Secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btc-api
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+    app.kubernetes.io/part-of: btc-forecast
+spec:
+  replicas: 3  # initial replicas for high availability (the HPA manages it afterwards)
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: btc-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # never drop below the desired count during a rollout
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: btc-api
+        app.kubernetes.io/part-of: btc-forecast
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001  # the non-root "app" user baked into the image
+        runAsGroup: 10001
+        fsGroup: 10001
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          # Image built and pushed by GitHub Actions, pinned to an immutable commit-SHA tag
+          image: docker.io/samiurk/btc-forecast-api:48cb72d790da3b2e2bafacc98501aefd5ae660d8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: btc-api-config  # MODEL_STAGE, LOG_LEVEL, PORT, MODELS_DIR
+            - secretRef:
+                name: btc-api-secret  # API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # Liveness = "is it FROZEN?" -> restart only after ~50 s without any answer.
+          # (With timeout 3 s x 3 failures, the load test showed the kubelet killing pods that
+          #  were merely BUSY, which cascaded into 503s. Busy pods are handled by readiness.)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          # Readiness = "can it take traffic NOW?" -> stays strict: an overloaded pod is briefly
+          # removed from the Service endpoints instead of being restarted.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+              readOnly: true  # the API only reads models; the train Job writes them
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: btc-models-pvc
+        - name: tmp
+          emptyDir: {}

@@ -65,3 +65,27 @@ def test_recursive_forecast_rejects_bad_horizon(trained):
     booster.load_model(str(trained["models_root"] / "production" / config.MODEL_FILE))
     with pytest.raises(ValueError):
         recursive_forecast(booster, [1.0] * 40, "2026-01-01", 0)
+
+
+def test_fast_forecast_equals_pandas_reference(trained):
+    """The optimised recursive forecast gives the same prices as a pandas-based reference loop."""
+    import math
+
+    from src.features import FEATURE_COLUMNS, MIN_HISTORY, indicator_frame
+
+    booster = xgb.Booster()
+    d = trained["models_root"] / "production"
+    booster.load_model(str(d / config.MODEL_FILE))
+    hist = json.loads((d / config.HISTORY_FILE).read_text())
+    last = pd.Timestamp(hist["dates"][-1])
+
+    ref, history = [], list(hist["closes"])
+    for step in range(1, 15):
+        row = indicator_frame(pd.Series(history[-MIN_HISTORY:])).iloc[[-1]].copy()
+        row["dow"] = (last + pd.Timedelta(days=step)).dayofweek
+        price = history[-1] * math.exp(float(booster.inplace_predict(row[FEATURE_COLUMNS])[0]))
+        history.append(price)
+        ref.append(price)
+
+    fast = [p for _, p in recursive_forecast(booster, hist["closes"], last, 14)]
+    np.testing.assert_allclose(fast, ref, rtol=1e-9)

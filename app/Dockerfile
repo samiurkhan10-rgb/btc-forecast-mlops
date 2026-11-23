@@ -42,7 +42,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MODEL_STAGE=production \
     LOG_LEVEL=INFO \
     PORT=5000 \
-    GUNICORN_WORKERS=2
+    GUNICORN_WORKERS=2 \
+    GUNICORN_THREADS=4
 
 # Dedicated unprivileged user (fixed UID so K8s securityContext can reference it)
 RUN groupadd --system --gid 10001 app \
@@ -64,5 +65,8 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT','5000'), timeout=4)" || exit 1
 
-# exec -> gunicorn becomes PID 1 and receives SIGTERM directly (graceful shutdown)
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${GUNICORN_WORKERS} --timeout 60 --graceful-timeout 20 --worker-tmp-dir /dev/shm app.app:app"]
+# exec -> gunicorn becomes PID 1 and receives SIGTERM directly (graceful shutdown).
+# gthread: each of the 2 workers serves up to 4 requests concurrently, so a quick /health
+# probe is never stuck behind slow /predict calls (sync workers handle 1 request at a time,
+# which made liveness probes time out under load and the kubelet restart busy pods).
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${GUNICORN_WORKERS} --worker-class gthread --threads ${GUNICORN_THREADS} --timeout 60 --graceful-timeout 20 --worker-tmp-dir /dev/shm app.app:app"]

@@ -1,0 +1,7 @@
+# All project resources live in one namespace (isolation + easy `kubectl -n btc-forecast ...`)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: btc-forecast
+  labels:
+    app.kubernetes.io/part-of: btc-forecast

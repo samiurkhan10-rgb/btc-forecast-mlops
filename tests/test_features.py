@@ -61,3 +61,18 @@ def test_inference_features_match_training_features(raw_df):
 def test_next_step_features_needs_min_history():
     with pytest.raises(ValueError):
         next_step_features([1.0] * (MIN_HISTORY - 1), pd.Timestamp("2026-01-01"))
+
+
+def test_numpy_fast_path_matches_pandas_on_every_row(raw_df):
+    """next_step_vector (NumPy, used by the API) == indicator_frame (pandas, used in training)."""
+    from src.features import next_step_vector
+
+    frame = make_training_frame(raw_df)
+    closes = raw_df["close"].to_numpy()
+    for i in range(0, len(frame), 7):
+        day = frame["date"].iloc[i]
+        upto = closes[: raw_df.index[raw_df["date"] == day][0] + 1]
+        vec = next_step_vector(upto, day + pd.Timedelta(days=1))
+        np.testing.assert_allclose(
+            vec[0], frame[FEATURE_COLUMNS].iloc[i].to_numpy(dtype=float), rtol=1e-9, atol=1e-12
+        )

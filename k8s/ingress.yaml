@@ -1,0 +1,25 @@
+# D6: NGINX Ingress routes http://btc-forecast.local/ to the ClusterIP service.
+# Windows + minikube docker driver: add "127.0.0.1 btc-forecast.local" to the hosts file and
+# keep `minikube tunnel` running in an Administrator terminal.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: btc-api
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "256k"  # same limit as the Flask app
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: btc-forecast.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: btc-api
+                port:
+                  number: 80

@@ -1,0 +1,34 @@
+# D4: internal (ClusterIP) and external (NodePort) access, both port 80 -> targetPort 5000.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: btc-api
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+spec:
+  type: ClusterIP  # stable in-cluster DNS name btc-api.btc-forecast.svc; used by the Ingress
+  selector:
+    app.kubernetes.io/name: btc-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: btc-api-nodeport
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+spec:
+  type: NodePort  # exposed on every node at :30080
+  selector:
+    app.kubernetes.io/name: btc-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+      nodePort: 30080

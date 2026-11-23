@@ -1,0 +1,19 @@
+# D2: persistent storage for model artifacts (and historical data files under data/),
+# mounted at /app/models. Survives pod restarts / deletions / rollouts.
+# Limitation: ReadWriteOnce works here only because minikube has ONE node, so the train Job
+# and all API replicas run on the same node. A multi-node cluster would need ReadWriteMany
+# storage (NFS, CephFS, EFS...) or an object store (S3/MinIO) for models.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: btc-models-pvc
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard  # minikube's default hostPath provisioner
+  resources:
+    requests:
+      storage: 1Gi

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-from src.features import MIN_HISTORY, next_step_features
+from src.features import MIN_HISTORY, next_step_vector
 
 
 def recursive_forecast(
@@ -24,7 +24,8 @@ def recursive_forecast(
     out = []
     for step in range(1, horizon + 1):
         next_date = last_date + pd.Timedelta(days=step)
-        x = next_step_features(history, next_date)
+        # NumPy row in FEATURE_COLUMNS order (no per-step DataFrame: see next_step_vector)
+        x = next_step_vector(history, next_date)
         log_ret = float(booster.inplace_predict(x)[0])
         price = history[-1] * math.exp(log_ret)
         history = history[1:] + [price]

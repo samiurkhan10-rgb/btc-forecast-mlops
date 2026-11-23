@@ -63,14 +63,34 @@ def make_training_frame(raw: pd.DataFrame) -> pd.DataFrame:
     return feats.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
 
 
+def next_step_vector(closes, next_date) -> np.ndarray:
+    """Fast inference path: ONE feature row as a (1, n_features) NumPy array.
+
+    Computes exactly what `indicator_frame` computes for its last row, but with plain NumPy
+    on the last MIN_HISTORY closes. Building a pandas DataFrame per step cost ~47 ms vs
+    ~0.1 ms here, which dominated /predict latency under load (found in the Part D load test).
+    Equality with the pandas version is enforced by tests/test_features.py.
+    """
+    c = np.asarray(closes, dtype=float)
+    if len(c) < MIN_HISTORY:
+        raise ValueError(f"need at least {MIN_HISTORY} closes, got {len(c)}")
+    c = c[-MIN_HISTORY:]
+    r = np.diff(np.log(c))  # MIN_HISTORY - 1 = 30 daily log returns
+    lags = r[::-1][:N_RETURN_LAGS]  # ret_lag_1 = latest return, ret_lag_2 = the one before...
+    row = [
+        *lags,
+        c[-1] / c[-MA_SHORT:].mean() - 1.0,  # ma7_ratio
+        c[-1] / c[-MA_LONG:].mean() - 1.0,  # ma30_ratio
+        r[-MA_SHORT:].std(ddof=1),  # vol_7 (pandas rolling std uses ddof=1)
+        r[-MA_LONG:].std(ddof=1),  # vol_30
+        pd.Timestamp(next_date).dayofweek,  # dow of the predicted day
+    ]
+    return np.asarray(row, dtype=float).reshape(1, -1)
+
+
 def next_step_features(closes, next_date: pd.Timestamp) -> pd.DataFrame:
-    """One feature row for predicting `next_date` given the closes up to the day before."""
-    closes = np.asarray(closes, dtype=float)
-    if len(closes) < MIN_HISTORY:
-        raise ValueError(f"need at least {MIN_HISTORY} closes, got {len(closes)}")
-    feats = indicator_frame(pd.Series(closes[-MIN_HISTORY:])).iloc[[-1]].copy()
-    feats["dow"] = pd.Timestamp(next_date).dayofweek
-    return feats[FEATURE_COLUMNS].reset_index(drop=True)
+    """Same row as `next_step_vector`, labelled with FEATURE_COLUMNS (for inspection/tests)."""
+    return pd.DataFrame(next_step_vector(closes, next_date), columns=FEATURE_COLUMNS)
 
 
 def run_features(raw_path: Path, out_path: Path) -> Path:

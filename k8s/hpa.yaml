@@ -1,0 +1,37 @@
+# D5: scale the API between 2 and 8 pods to keep average CPU at 60% of the 100m request.
+# Needs metrics-server (minikube addon). Note: the Deployment starts with 3 replicas; once the
+# HPA owns the Deployment, an idle API scales down towards minReplicas=2.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: btc-api
+  namespace: btc-forecast
+  labels:
+    app.kubernetes.io/name: btc-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: btc-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0  # react immediately to load
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 120  # avoid flapping; shorter than the 300 s default for the demo
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30
